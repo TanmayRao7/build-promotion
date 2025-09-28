@@ -16,14 +16,14 @@ on:
         options:
           - test
           - qa
-          - pre-prod
+          - prod
       target_env:
         description: 'Target environment'
         required: true
         type: choice
         options:
+          - test
           - qa
-          - pre-prod
           - prod
 
 jobs:
