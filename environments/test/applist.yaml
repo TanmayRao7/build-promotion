@@ -8,5 +8,5 @@ key:
       appImageTagName: release-1.01-ceb5a4e-new
       <<: *defaultValues
     - name: node-backed-api
-      appImageTagName: release-1.02-0ba6e15e-new
+      appImageTagName: release-1.02-0ba6e15e
       <<: *defaultValues

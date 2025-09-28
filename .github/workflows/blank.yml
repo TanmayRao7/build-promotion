@@ -41,7 +41,10 @@ jobs:
           
       - name: Update target environment
         run: |
-          yq eval '(.key.components[] | select(.name == "${{ inputs.app_name }}").appImageTagName) = "${{ steps.get_tag.outputs.tag }}"' -i environments/${{ inputs.target_env }}/applist.yaml
+          # Get current tag to replace
+          CURRENT_TAG=$(yq eval '.key.components[] | select(.name == "${{ inputs.app_name }}") | .appImageTagName' environments/${{ inputs.target_env }}/applist.yaml)
+          # Replace only the appImageTagName line for the specific app
+          sed -i "/- name: ${{ inputs.app_name }}/,/<<: \*defaultValues/ s/appImageTagName: $CURRENT_TAG/appImageTagName: ${{ steps.get_tag.outputs.tag }}/" environments/${{ inputs.target_env }}/applist.yaml
           
       - name: Commit changes
         run: |
