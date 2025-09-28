@@ -27,39 +27,59 @@ on:
           - prod
 
 jobs:
-  promote:
+  review_deployment:
     runs-on: ubuntu-latest
+    outputs:
+      needs_promotion: ${{ steps.check.outputs.needs_promotion }}
+      source_tag: ${{ steps.check.outputs.source_tag }}
     steps:
       - uses: actions/checkout@v4
       
-      - name: Get source tag
-        id: get_tag
+      - name: Check promotion needed
+        id: check
         run: |
-          CURRENT_TAG=$(yq eval '.key.components[] | select(.name == "${{ inputs.app_name }}") | .appImageTagName' environments/${{ inputs.target_env }}/applist.yaml)
-          echo "tag=$TAG" >> $GITHUB_OUTPUT
-          echo "Promoting ${{ inputs.app_name }}: $TAG"
+          SOURCE_TAG=$(yq eval '.key.components[] | select(.name == "${{ inputs.app_name }}") | .appImageTagName' environments/${{ inputs.source_env }}/applist.yaml)
+          TARGET_TAG=$(yq eval '.key.components[] | select(.name == "${{ inputs.app_name }}") | .appImageTagName' environments/${{ inputs.target_env }}/applist.yaml)
           
-      - name: check target environment
-        run: |
-          CURRENT_TAG=$(yq eval '.key.components[] | select(.name == "${{ inputs.app_name }}") | .appImageTagName' environments/${{ inputs.target_env }}/applist.yaml)
+          echo "source_tag=$SOURCE_TAG" >> $GITHUB_OUTPUT
+          echo "Source tag: $SOURCE_TAG"
+          echo "Target tag: $TARGET_TAG"
           
-          if [[ "$CURRENT_TAG" == "${{ steps.get_tag.outputs.tag }}" ]]; then
-            echo "No changes needed - tag already matches"
-            echo "has_changes=false" >> $GITHUB_ENV
+          if [[ "$SOURCE_TAG" == "$TARGET_TAG" ]]; then
+            echo "needs_promotion=false" >> $GITHUB_OUTPUT
+            echo "No promotion needed - tags already match"
           else
-            sed -i "/- name: ${{ inputs.app_name }}/,/<<: \*defaultValues/ s/appImageTagName: $CURRENT_TAG/appImageTagName: ${{ steps.get_tag.outputs.tag }}/" environments/${{ inputs.target_env }}/applist.yaml
-            echo "has_changes=true" >> $GITHUB_ENV
+            echo "needs_promotion=true" >> $GITHUB_OUTPUT
+            echo "Promotion needed: $TARGET_TAG → $SOURCE_TAG"
           fi
+
+  build_promotion:
+    environment: 
+      name: ${{ inputs.target_env }}
+      url: https://www.${{ inputs.target_env }}.example.com/${{ inputs.app_name }}/version
+    runs-on: ubuntu-latest
+    needs: [review_deployment]
+    if: needs.review_deployment.outputs.needs_promotion == 'true'
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Update target environment
+        run: |
+          CURRENT_TAG=$(yq eval '.key.components[] | select(.name == "${{ inputs.app_name }}") | .appImageTagName' environments/${{ inputs.target_env }}/applist.yaml)
+          sed -i "/- name: ${{ inputs.app_name }}/,/<<: \*defaultValues/ s/appImageTagName: $CURRENT_TAG/appImageTagName: ${{ needs.review_deployment.outputs.source_tag }}/" environments/${{ inputs.target_env }}/applist.yaml
           
       - name: Commit changes
-        if: env.has_changes == 'true'
         run: |
           git config --local user.email "action@github.com"
           git config --local user.name "GitHub Action"
           git add environments/${{ inputs.target_env }}/applist.yaml
-          git commit -m "Promote ${{ inputs.app_name }} from ${{ inputs.source_env }} to ${{ inputs.target_env }}: ${{ steps.get_tag.outputs.tag }}"
+          git commit -m "Promote ${{ inputs.app_name }} from ${{ inputs.source_env }} to ${{ inputs.target_env }}: ${{ needs.review_deployment.outputs.source_tag }}"
           git push
-          
-      - name: No changes summary
-        if: env.has_changes == 'false'
-        run: echo "No promotion needed - ${{ inputs.app_name }} already has tag ${{ steps.get_tag.outputs.tag }} in ${{ inputs.target_env }}"
+
+  no_promotion_needed:
+    runs-on: ubuntu-latest
+    needs: [review_deployment]
+    if: needs.review_deployment.outputs.needs_promotion == 'false'
+    steps:
+      - name: Skip promotion
+        run: echo "No promotion needed - ${{ inputs.app_name }} already has tag ${{ needs.review_deployment.outputs.source_tag }} in ${{ inputs.target_env }}"
