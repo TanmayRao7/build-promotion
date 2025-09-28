@@ -1,0 +1,12 @@
+defaults: &defaultValues
+  k8sTargetVersion: master
+  clusterName: qa.svc.cluster.local
+  helmChart: app
+key:
+  components:
+    - name: python-fast-api
+      appImageTagName: release-1.01-ceb5a4e
+      <<: *defaultValues
+    - name: node-backed-api
+      appImageTagName: release-1.02-0ba6e15e
+      <<: *defaultValues
