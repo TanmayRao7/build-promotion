@@ -1,36 +1,143 @@
-# This is a basic workflow to help you get started with Actions
-
-name: CI
-
-# Controls when the workflow will run
+name: Promote Build
 on:
-  # Triggers the workflow on push or pull request events but only for the "master" branch
-  push:
-    branches: [ "master" ]
-  pull_request:
-    branches: [ "master" ]
-
-  # Allows you to run this workflow manually from the Actions tab
   workflow_dispatch:
+    inputs:
+      source_env:
+        description: 'Source environment'
+        required: true
+        type: choice
+        options:
+          - test
+          - qa
+          - pre-prod
+      target_env:
+        description: 'Target environment'
+        required: true
+        type: choice
+        options:
+          - qa
+          - pre-prod
+          - prod
+      promotion_mode:
+        description: 'Promotion mode'
+        required: true
+        type: choice
+        options:
+          - all_common_apps
+          - specific_apps
+        default: all_common_apps
+      specific_apps:
+        description: 'Specific apps (comma-separated, only if specific_apps mode)'
+        required: false
+        default: ''
 
-# A workflow run is made up of one or more jobs that can run sequentially or in parallel
 jobs:
-  # This workflow contains a single job called "build"
-  build:
-    # The type of runner that the job will run on
+  promote:
     runs-on: ubuntu-latest
-
-    # Steps represent a sequence of tasks that will be executed as part of the job
     steps:
-      # Checks-out your repository under $GITHUB_WORKSPACE, so your job can access it
       - uses: actions/checkout@v4
-
-      # Runs a single command using the runners shell
-      - name: Run a one-line script
-        run: echo Hello, world!
-
-      # Runs a set of commands using the runners shell
-      - name: Run a multi-line script
+      
+      - name: Validate environments
         run: |
-          echo Add other actions to build,
-          echo test, and deploy your project.
+          if [[ "${{ inputs.source_env }}" == "${{ inputs.target_env }}" ]]; then
+            echo "❌ Source and target environments cannot be the same"
+            exit 1
+          fi
+          
+      - name: Find apps to promote
+        id: apps
+        run: |
+          # Get apps from both environments
+          SOURCE_APPS=$(yq eval '.key.components[].name' environments/${{ inputs.source_env }}/applist.yaml | sort)
+          TARGET_APPS=$(yq eval '.key.components[].name' environments/${{ inputs.target_env }}/applist.yaml | sort)
+          
+          # Find common apps
+          COMMON_APPS=$(comm -12 <(echo "$SOURCE_APPS") <(echo "$TARGET_APPS") | tr '\n' ',' | sed 's/,$//')
+          
+          echo "📋 Apps in source (${{ inputs.source_env }}): $(echo "$SOURCE_APPS" | tr '\n' ',' | sed 's/,$//')"
+          echo "📋 Apps in target (${{ inputs.target_env }}): $(echo "$TARGET_APPS" | tr '\n' ',' | sed 's/,$//')"
+          echo "🔄 Common apps: $COMMON_APPS"
+          
+          if [[ "${{ inputs.promotion_mode }}" == "all_common_apps" ]]; then
+            APPS_TO_PROMOTE="$COMMON_APPS"
+          else
+            # Validate specific apps exist in both environments
+            IFS=',' read -ra SPECIFIC <<< "${{ inputs.specific_apps }}"
+            VALID_APPS=""
+            for app in "${SPECIFIC[@]}"; do
+              app=$(echo "$app" | xargs) # trim whitespace
+              if echo "$SOURCE_APPS" | grep -q "^$app$" && echo "$TARGET_APPS" | grep -q "^$app$"; then
+                VALID_APPS="${VALID_APPS}${app},"
+              else
+                echo "⚠️  Warning: $app not found in both environments, skipping"
+              fi
+            done
+            APPS_TO_PROMOTE=$(echo "$VALID_APPS" | sed 's/,$//')
+          fi
+          
+          if [[ -z "$APPS_TO_PROMOTE" ]]; then
+            echo "❌ No valid apps to promote"
+            exit 1
+          fi
+          
+          echo "✅ Apps to promote: $APPS_TO_PROMOTE"
+          echo "apps=$APPS_TO_PROMOTE" >> $GITHUB_OUTPUT
+          
+      - name: Promote apps
+        run: |
+          IFS=',' read -ra APPS <<< "${{ steps.apps.outputs.apps }}"
+          PROMOTED_APPS=""
+          
+          for app in "${APPS[@]}"; do
+            app=$(echo "$app" | xargs) # trim whitespace
+            
+            echo "🚀 Promoting $app from ${{ inputs.source_env }} to ${{ inputs.target_env }}"
+            
+            # Get tag from source environment
+            SOURCE_TAG=$(yq eval ".key.components[] | select(.name == \"$app\") | .appImageTagName" environments/${{ inputs.source_env }}/applist.yaml)
+            
+            if [[ -z "$SOURCE_TAG" || "$SOURCE_TAG" == "null" ]]; then
+              echo "❌ Could not find tag for $app in ${{ inputs.source_env }}"
+              continue
+            fi
+            
+            # Get current tag from target environment
+            CURRENT_TAG=$(yq eval ".key.components[] | select(.name == \"$app\") | .appImageTagName" environments/${{ inputs.target_env }}/applist.yaml)
+            
+            if [[ "$SOURCE_TAG" == "$CURRENT_TAG" ]]; then
+              echo "ℹ️  $app already has tag $SOURCE_TAG in ${{ inputs.target_env }}, skipping"
+              continue
+            fi
+            
+            echo "📝 Updating $app: $CURRENT_TAG → $SOURCE_TAG"
+            
+            # Update tag in target environment
+            yq eval "(.key.components[] | select(.name == \"$app\") | .appImageTagName) = \"$SOURCE_TAG\"" -i environments/${{ inputs.target_env }}/applist.yaml
+            
+            PROMOTED_APPS="${PROMOTED_APPS}$app ($SOURCE_TAG), "
+          done
+          
+          if [[ -n "$PROMOTED_APPS" ]]; then
+            PROMOTED_APPS=$(echo "$PROMOTED_APPS" | sed 's/, $//')
+            echo "promoted_apps=$PROMOTED_APPS" >> $GITHUB_ENV
+            echo "has_changes=true" >> $GITHUB_ENV
+          else
+            echo "has_changes=false" >> $GITHUB_ENV
+          fi
+          
+      - name: Commit and push changes
+        if: env.has_changes == 'true'
+        run: |
+          git config --local user.email "action@github.com"
+          git config --local user.name "GitHub Action"
+          git add environments/${{ inputs.target_env }}/applist.yaml
+          git commit -m "🚀 Promote from ${{ inputs.source_env }} to ${{ inputs.target_env }}: ${{ env.promoted_apps }}"
+          git push
+          
+      - name: Summary
+        run: |
+          if [[ "${{ env.has_changes }}" == "true" ]]; then
+            echo "✅ Successfully promoted: ${{ env.promoted_apps }}"
+          else
+            echo "ℹ️  No changes needed - all apps already up to date"
+          fi
