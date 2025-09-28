@@ -41,7 +41,7 @@ jobs:
           
       - name: Update target environment
         run: |
-          yq eval '(.key.components[] | select(.name == "${{ inputs.app_name }}") | .appImageTagName) = "${{ steps.get_tag.outputs.tag }}"' -i environments/${{ inputs.target_env }}/applist.yaml
+          yq eval '(.key.components[] | select(.name == "${{ inputs.app_name }}").appImageTagName) = "${{ steps.get_tag.outputs.tag }}"' -i environments/${{ inputs.target_env }}/applist.yaml
           
       - name: Commit changes
         run: |
