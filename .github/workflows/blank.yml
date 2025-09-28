@@ -41,15 +41,25 @@ jobs:
           
       - name: Update target environment
         run: |
-          # Get current tag to replace
           CURRENT_TAG=$(yq eval '.key.components[] | select(.name == "${{ inputs.app_name }}") | .appImageTagName' environments/${{ inputs.target_env }}/applist.yaml)
-          # Replace only the appImageTagName line for the specific app
-          sed -i "/- name: ${{ inputs.app_name }}/,/<<: \*defaultValues/ s/appImageTagName: $CURRENT_TAG/appImageTagName: ${{ steps.get_tag.outputs.tag }}/" environments/${{ inputs.target_env }}/applist.yaml
+          
+          if [[ "$CURRENT_TAG" == "${{ steps.get_tag.outputs.tag }}" ]]; then
+            echo "No changes needed - tag already matches"
+            echo "has_changes=false" >> $GITHUB_ENV
+          else
+            sed -i "/- name: ${{ inputs.app_name }}/,/<<: \*defaultValues/ s/appImageTagName: $CURRENT_TAG/appImageTagName: ${{ steps.get_tag.outputs.tag }}/" environments/${{ inputs.target_env }}/applist.yaml
+            echo "has_changes=true" >> $GITHUB_ENV
+          fi
           
       - name: Commit changes
+        if: env.has_changes == 'true'
         run: |
           git config --local user.email "action@github.com"
           git config --local user.name "GitHub Action"
           git add environments/${{ inputs.target_env }}/applist.yaml
           git commit -m "Promote ${{ inputs.app_name }} from ${{ inputs.source_env }} to ${{ inputs.target_env }}: ${{ steps.get_tag.outputs.tag }}"
           git push
+          
+      - name: No changes summary
+        if: env.has_changes == 'false'
+        run: echo "No promotion needed - ${{ inputs.app_name }} already has tag ${{ steps.get_tag.outputs.tag }} in ${{ inputs.target_env }}"
