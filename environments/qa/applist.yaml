@@ -5,7 +5,7 @@ defaults: &defaultValues
 key:
   components:
     - name: python-fast-api
-      appImageTagName: release-1.01-promote-to-qa
+      appImageTagName: release-1.01-promote-to-qa-new
       !!merge <<: *defaultValues
     - name: node-backed-api
       appImageTagName: release-1.02-0ba6e15e
