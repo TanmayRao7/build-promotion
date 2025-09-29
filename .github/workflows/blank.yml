@@ -38,7 +38,7 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
       
-      - name: Validate environments
+      - name: "🔍 Validate environments"
         run: |
           if [[ "${{ inputs.source_env }}" == "${{ inputs.target_env }}" ]]; then
             echo "❌ Error: Source and target environments cannot be the same"
